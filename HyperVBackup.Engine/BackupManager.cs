@@ -23,7 +23,6 @@ using System.Linq;
 using System.Management;
 using System.Text;
 using Alphaleonis.Win32.Vss;
-using Ionic.Zip;
 using NLog;
 using SevenZip;
 using Directory = Alphaleonis.Win32.Filesystem.Directory;
@@ -286,179 +285,111 @@ namespace HyperVBackUp.Engine
                     {
                         logger.Debug($"Start compression. File: {vmBackupPath}");
 
-                        if (options.ZipFormat)
+                        if (options.CompressionLevel == -1)
                         {
-                            if (options.CompressionLevel == -1)
+                            options.CompressionLevel = 3;
+                        }
+
+                        SevenZipBase.SetLibraryPath(
+                            Path.Combine(AppDomain.CurrentDomain.SetupInformation.ApplicationBase, "7z.dll"));
+
+                        var sevenZip = new SevenZipCompressor
+                        {
+                            ArchiveFormat = OutArchiveFormat.SevenZip,
+                            CompressionMode = CompressionMode.Create,
+                            DirectoryStructure = true,
+                            PreserveDirectoryRoot = false
+                        };
+
+                        if (options.MultiThreaded)
+                        {
+                            sevenZip.CustomParameters.Add("mt", "on");
+                        }
+
+                        sevenZip.CustomParameters.Add("d", "24");
+
+                        switch (options.CompressionLevel)
+                        {
+                            case 0:
+                                sevenZip.CompressionLevel = CompressionLevel.None;
+                                break;
+                            case 1:
+                            case 2:
+                                sevenZip.CompressionLevel = CompressionLevel.Fast;
+                                break;
+                            case 3:
+                            case 4:
+                            case 5:
+                                sevenZip.CompressionLevel = CompressionLevel.Low;
+                                break;
+                            case 6:
+                                sevenZip.CompressionLevel = CompressionLevel.Normal;
+                                break;
+                            case 7:
+                            case 8:
+                                sevenZip.CompressionLevel = CompressionLevel.High;
+                                break;
+                            case 9:
+                                sevenZip.CompressionLevel = CompressionLevel.Ultra;
+                                break;
+                        }
+
+                        if (BackupProgress != null)
+                        {
+                            sevenZip.FileCompressionStarted += (sender, e) =>
                             {
-                                options.CompressionLevel = 6;
-                            }
+                                var ebp = new BackupProgressEventArgs
+                                {
+                                    AcrhiveFileName = e.FileName,
+                                    Action = EventAction.StartingArchive
+                                };
 
-                            using (var zf = new ZipFile(vmBackupPath))
+                                _currentFile = e.FileName;
+
+                                Report7ZipProgress(component, volumeMap, ebp);
+
+                                if (_cancel)
+                                {
+                                    e.Cancel = true;
+                                }
+                            };
+
+                            sevenZip.FileCompressionFinished += (sender, e) =>
                             {
-                                zf.ParallelDeflateThreshold = -1;
-                                zf.UseZip64WhenSaving = Zip64Option.Always;
-                                zf.Encryption = EncryptionAlgorithm.WinZipAes256;
-
-                                switch (options.CompressionLevel)
+                                var ebp = new BackupProgressEventArgs
                                 {
-                                    case 0:
-                                        zf.CompressionLevel = Ionic.Zlib.CompressionLevel.Level0;
-                                        break;
-                                    case 1:
-                                        zf.CompressionLevel = Ionic.Zlib.CompressionLevel.Level1;
-                                        break;
-                                    case 2:
-                                        zf.CompressionLevel = Ionic.Zlib.CompressionLevel.Level2;
-                                        break;
-                                    case 3:
-                                        zf.CompressionLevel = Ionic.Zlib.CompressionLevel.Level3;
-                                        break;
-                                    case 4:
-                                        zf.CompressionLevel = Ionic.Zlib.CompressionLevel.Level4;
-                                        break;
-                                    case 5:
-                                        zf.CompressionLevel = Ionic.Zlib.CompressionLevel.Level5;
-                                        break;
-                                    case 6:
-                                        zf.CompressionLevel = Ionic.Zlib.CompressionLevel.Level6;
-                                        break;
-                                    case 7:
-                                        zf.CompressionLevel = Ionic.Zlib.CompressionLevel.Level7;
-                                        break;
-                                    case 8:
-                                        zf.CompressionLevel = Ionic.Zlib.CompressionLevel.Level8;
-                                        break;
-                                    case 9:
-                                        zf.CompressionLevel = Ionic.Zlib.CompressionLevel.Level9;
-                                        break;
-                                }
+                                    AcrhiveFileName = _currentFile,
+                                    Action = EventAction.ArchiveDone
+                                };
 
-                                if (BackupProgress != null)
+                                _currentFile = string.Empty;
+
+                                Report7ZipProgress(component, volumeMap, ebp);
+                            };
+
+                            sevenZip.Compressing += (sender, e) =>
+                            {
+                                var ebp = new BackupProgressEventArgs
                                 {
-                                    zf.SaveProgress += (sender, e) => ReportZipProgress(component, volumeMap, e);
-                                }
+                                    AcrhiveFileName = _currentFile,
+                                    Action = EventAction.PercentProgress,
+                                    CurrentEntry = _currentFile,
+                                    PercentDone = e.PercentDone
+                                };
 
-                                if (!string.IsNullOrEmpty(options.Password))
-                                {
-                                    zf.Password = options.Password;
-                                }
+                                Report7ZipProgress(component, volumeMap, ebp);
+                            };
+                        }
 
-                                foreach (var file in files)
-                                {
-                                    logger.Debug($"Adding file: {file.Key}");
-                                    zf.AddEntry(file.Key, file.Value);
-                                }
-
-                                zf.Save();
-                            }
+                        if (string.IsNullOrEmpty(options.Password))
+                        {
+                            sevenZip.CompressStreamDictionary(files, vmBackupPath);
                         }
                         else
                         {
-                            if (options.CompressionLevel == -1)
-                            {
-                                options.CompressionLevel = 3;
-                            }
-
-                            SevenZipBase.SetLibraryPath(
-                                Path.Combine(AppDomain.CurrentDomain.SetupInformation.ApplicationBase, "7z.dll"));
-
-                            var sevenZip = new SevenZipCompressor
-                            {
-                                ArchiveFormat = OutArchiveFormat.SevenZip,
-                                CompressionMode = CompressionMode.Create,
-                                DirectoryStructure = true,
-                                PreserveDirectoryRoot = false
-                            };
-
-                            if (options.MultiThreaded)
-                            {
-                                sevenZip.CustomParameters.Add("mt", "on");
-                            }
-
-                            sevenZip.CustomParameters.Add("d", "24");
-
-                            switch (options.CompressionLevel)
-                            {
-                                case 0:
-                                    sevenZip.CompressionLevel = CompressionLevel.None;
-                                    break;
-                                case 1:
-                                case 2:
-                                    sevenZip.CompressionLevel = CompressionLevel.Fast;
-                                    break;
-                                case 3:
-                                case 4:
-                                case 5:
-                                    sevenZip.CompressionLevel = CompressionLevel.Low;
-                                    break;
-                                case 6:
-                                    sevenZip.CompressionLevel = CompressionLevel.Normal;
-                                    break;
-                                case 7:
-                                case 8:
-                                    sevenZip.CompressionLevel = CompressionLevel.High;
-                                    break;
-                                case 9:
-                                    sevenZip.CompressionLevel = CompressionLevel.Ultra;
-                                    break;
-                            }
-
-                            if (BackupProgress != null)
-                            {
-                                sevenZip.FileCompressionStarted += (sender, e) =>
-                                {
-                                    var ebp = new BackupProgressEventArgs
-                                    {
-                                        AcrhiveFileName = e.FileName,
-                                        Action = EventAction.StartingArchive
-                                    };
-
-                                    _currentFile = e.FileName;
-
-                                    Report7ZipProgress(component, volumeMap, ebp);
-
-                                    if (_cancel)
-                                    {
-                                        e.Cancel = true;
-                                    }
-                                };
-
-                                sevenZip.FileCompressionFinished += (sender, e) =>
-                                {
-                                    var ebp = new BackupProgressEventArgs
-                                    {
-                                        AcrhiveFileName = _currentFile,
-                                        Action = EventAction.ArchiveDone
-                                    };
-
-                                    _currentFile = string.Empty;
-
-                                    Report7ZipProgress(component, volumeMap, ebp);
-                                };
-
-                                sevenZip.Compressing += (sender, e) =>
-                                {
-                                    var ebp = new BackupProgressEventArgs
-                                    {
-                                        AcrhiveFileName = _currentFile,
-                                        Action = EventAction.PercentProgress,
-                                        CurrentEntry = _currentFile,
-                                        PercentDone = e.PercentDone
-                                    };
-
-                                    Report7ZipProgress(component, volumeMap, ebp);
-                                };
-                            }
-
-                            if (string.IsNullOrEmpty(options.Password))
-                            {
-                                sevenZip.CompressStreamDictionary(files, vmBackupPath);
-                            }
-                            else
-                            {
-                                sevenZip.CompressStreamDictionary(files, vmBackupPath, options.Password);
-                            }
+                            sevenZip.CompressStreamDictionary(files, vmBackupPath, options.Password);
                         }
+                        
 
                         logger.Debug("Compression finished");
 
@@ -661,64 +592,6 @@ namespace HyperVBackUp.Engine
             if (ebp.Cancel)
             {
                 _cancel = true;
-            }
-        }
-
-        private void ReportZipProgress(IVssWMComponent component, IDictionary<string, string> volumeMap,
-            ZipProgressEventArgs e)
-        {
-            BackupProgressEventArgs ebp = null;
-
-            if (e.EventType == ZipProgressEventType.Saving_Started)
-            {
-                ebp = new BackupProgressEventArgs()
-                {
-                    AcrhiveFileName = e.ArchiveName,
-                    Action = EventAction.StartingArchive
-                };
-            }
-            else if (e.EventType == ZipProgressEventType.Saving_BeforeWriteEntry ||
-                     e.EventType == ZipProgressEventType.Saving_EntryBytesRead)
-            {
-                var action = e.EventType == ZipProgressEventType.Saving_BeforeWriteEntry
-                    ? EventAction.StartingEntry
-                    : EventAction.SavingEntry;
-
-                ebp = new BackupProgressEventArgs()
-                {
-                    AcrhiveFileName = e.ArchiveName,
-                    Action = action,
-                    CurrentEntry = e.CurrentEntry.FileName,
-                    EntriesTotal = e.EntriesTotal,
-                    TotalBytesToTransfer = e.TotalBytesToTransfer,
-                    BytesTransferred = e.BytesTransferred
-                };
-            }
-            else if (e.EventType == ZipProgressEventType.Saving_Completed)
-            {
-                ebp = new BackupProgressEventArgs()
-                {
-                    AcrhiveFileName = e.ArchiveName,
-                    Action = EventAction.ArchiveDone
-                };
-            }
-
-            if (ebp != null)
-            {
-                ebp.Components = new Dictionary<string, string>
-                {
-                    {component.ComponentName, component.Caption}
-                };
-                ebp.VolumeMap = new Dictionary<string, string>();
-                foreach (var volume in volumeMap)
-                {
-                    ebp.VolumeMap.Add(volume.Key, volume.Value);
-                }
-
-                BackupProgress(this, ebp);
-
-                // Close the zip file operation neatly and throw the exception afterwards
-                e.Cancel = ebp.Cancel;
             }
         }
     }

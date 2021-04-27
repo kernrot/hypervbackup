@@ -136,6 +136,7 @@ namespace HyperVBackup.Console
                 System.Console.WriteLine("HyperVBackup 3");
                 System.Console.WriteLine("Copyright (C) 2012 Cloudbase Solutions SRL");
                 System.Console.WriteLine("Copyright (C) 2016/2017 Coliseo Software SRL");
+                System.Console.WriteLine("Copyright (C) 2021 Conrad Henke - 7ke.de");
 
                 _logger.Info($"HyperVBackup started at {DateTime.Now}");
 
