@@ -61,8 +61,7 @@ namespace HyperVBackUp.Engine
 
         private void BackupSubset(IDictionary<string, string> vmNamesMapSubset, Options options, ILogger logger)
         {
-            var vssImpl = VssUtils.LoadImplementation();
-            using (var vss = vssImpl.CreateVssBackupComponents())
+            using (var vss = VssFactoryProvider.Default.GetVssFactory().CreateVssBackupComponents())
             {
                 RaiseEvent(EventAction.InitializingVss, null, null);
 
